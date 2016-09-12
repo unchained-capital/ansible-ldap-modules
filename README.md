@@ -46,6 +46,10 @@ $ ln -s ansible-ldap-modules/ldap_entry library/ldap_entry
 $ ln -s ansible-ldap-modules/ldap_attr  library/ldap_attr
 ```
 
+You can also explicitly set the `ANSIBLE_LIBRARY` environment variable
+or the `library` entry within the `defaults` section of your
+`ansible.cfg` to include this repository's directory.
+
 # Usage
 
 (copied from psager's [original README](https://bitbucket.org/psagers/ansible-ldap/src/ca4c0025358cdeba33e9ef0369af3430bf4812ad/README.md))
