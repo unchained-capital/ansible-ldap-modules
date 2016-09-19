@@ -1,0 +1,239 @@
+#!/usr/bin/env python
+
+from traceback import format_exc
+
+import ldap
+import ldap.modlist
+import ldap.sasl
+
+DOCUMENTATION = """
+---
+module: ldap_upsert
+short_description: Insert or update an LDAP entry.
+description:
+    - Insert or update an LDAP entry. Existing entries with matching
+      C(dn) will have their attributes updated.  Otherwise a new entry
+      will be created with the given attributes.  This module cannot
+      delete entries or remove attributes, see M(ldap_entry) and
+      M(ldap_attr), respectively.
+notes: []
+version_added: null
+author: Peter Sagerson
+requirements:
+    - python-ldap
+options:
+    dn:
+        required: true
+        description:
+            - The DN of the entry to insert or update.
+    objectClass:
+        required: true
+        description:
+            - Must be a list of objectClass values to use when
+              creating the entry. It can either be a string containing
+              a comma-separated list of values, or an actual list of
+              strings.  When updating, these values are not used.
+    '...':
+        required: false
+        description:
+            - All additional arguments are taken to be LDAP attribute
+              names like C(objectClass), with similar lists of values.
+              If the entry exists, these attributes will be updated if
+              necessary.  Otherwise the newly created entry will have
+              these attributes.
+    server_uri:
+        required: false
+        default: ldapi:///
+        description:
+            - A URI to the LDAP server. The default value lets the underlying
+              LDAP client library look for a UNIX domain socket in its default
+              location.
+    start_tls:
+        required: false
+        default: false
+        description:
+            - If true, we'll use the START_TLS LDAP extension.
+    bind_dn:
+        required: false
+        description:
+            - A DN to bind with. If this is omitted, we'll try a SASL bind with
+              the EXTERNAL mechanism. If this is blank, we'll use an anonymous
+              bind.
+    bind_pw:
+        required: false
+        description:
+            - The password to use with C(bind_dn).
+"""
+
+
+EXAMPLES = """
+# Make sure we have a parent entry for users.
+- ldap_entry: dn='ou=users,dc=example,dc=com' objectClass=organizationalUnit description="My Org Unit"
+  sudo: true
+
+# Make sure we have an admin user.
+- ldap_entry:
+    dn: 'cn=admin,dc=example,dc=com'
+    objectClass: simpleSecurityObject,organizationalRole
+    description: An LDAP administrator
+    userPassword: '{SSHA}pedsA5Y9wHbZ5R90pRdxTEZmn6qvPdzm'
+  sudo: true
+"""
+
+def main():
+    module = AnsibleModule(
+        argument_spec={
+            'dn': dict(required=True),
+            'server_uri': dict(default='ldapi:///'),
+            'start_tls': dict(default='false', choices=(BOOLEANS+['True', True, 'False', False])),
+            'bind_dn': dict(default=None),
+            'bind_pw': dict(default='', no_log=True),
+        },
+        check_invalid_arguments=False,
+        supports_check_mode=False,
+    )
+
+    try:
+        LdapUpsert(module).main()
+    except ldap.LDAPError, e:
+        module.fail_json(msg=str(e), exc=format_exc())
+
+
+class LdapUpsert(object):
+
+    def __init__(self, module):
+        self.module = module
+
+        self.server_uri = self.module.params['server_uri']
+        self.start_tls  = self._boolean_param('start_tls')
+        self.bind_dn    = self._utf8_param('bind_dn')
+        self.bind_pw    = self._utf8_param('bind_pw')
+        
+        self.dn = self._utf8_param('dn')
+        self._load_attrs()
+
+        if 'objectClass' not in self.attrs:
+            self.module.fail_json(msg="At least one objectClass must be provided")
+
+    def _boolean_param(self, name):
+        return self.module.boolean(self.module.params[name])
+        
+    def _utf8_param(self, name):
+        return self._force_utf8(self.module.params[name])
+
+    def _load_attr_values(self, name, raw):
+        if isinstance(raw, basestring):
+            values = raw.split(',')
+        else:
+            values = raw
+
+        if not (isinstance(values, list) and all(isinstance(value, basestring) for value in values)):
+            self.module.fail_json(msg="{} must be a string or list of strings.".format(name))
+
+        return map(self._force_utf8, values)
+        
+    def _force_utf8(self, value):
+        """ If value is unicode, encode to utf-8. """
+        if isinstance(value, unicode):
+            value = value.encode('utf-8')
+
+        return value
+            
+    def _load_attrs(self):
+        self.attrs = {}
+        for name, raw in self.module.params.iteritems():
+            if name not in self.module.argument_spec:
+                self.attrs[name] = self._load_attr_values(name, raw)
+
+    def main(self):
+        if self.entry_exists():
+            results = self.update_entry()
+            self.module.exit_json(**results)
+        else:
+            insert_result = self.insert_entry()
+            self.module.exit_json(changed=True, results=[insert_result])
+
+    def entry_exists(self):
+        try:
+            results = self.connection.search_s(self.dn, ldap.SCOPE_BASE)
+            for result in results:
+                if result[0] == self.dn:
+                    return True
+        except ldap.NO_SUCH_OBJECT:
+            return False
+    
+    def insert_entry(self):
+        modlist = ldap.modlist.addModlist(self.attrs)
+        result  = self.connection.add_s(self.dn, modlist)
+        return result
+
+    def update_entry(self):
+        results = []
+        for attr, value in self.attrs.iteritems():
+            if attr == 'objectClass': continue
+            value   = self._extract_value(value)
+            check   = self._attribute_value_check(attr, value)
+            if check is False:
+                op = ldap.MOD_REPLACE
+            elif check is None:
+                op = ldap.MOD_ADD
+            else:
+                op = None       # Nothing to see here...
+            if op is not None:
+                result = self.connection.modify_s(self.dn, [(op, attr, value)])
+                results.append(result)
+        if len(results) == 0:
+            return dict(changed=False)
+        else:
+            return dict(changed=True, results=results)
+
+    def _attribute_value_check(self, attr, value):
+        try:
+            return bool(self.connection.compare_s(self.dn, attr, value))
+        except ldap.NO_SUCH_ATTRIBUTE:
+            return None
+
+    def _extract_value(self, values):
+        if isinstance(values, basestring):
+            if values == '':
+                values = []
+            else:
+                values = [values]
+
+        if not (isinstance(values, list) and all(isinstance(value, basestring) for value in values)):
+            self.module.fail_json(msg="Attribute values must be strings or lists of strings.")
+
+        values = map(self._force_utf8, values)
+        if len(values) == 1:
+            return values[0]
+        else:
+            return values
+
+    #
+    # LDAP Connection
+    #
+    _connection = None
+
+    @property
+    def connection(self):
+        """ An authenticated connection to the LDAP server (cached). """
+        if self._connection is None:
+            self._connection = self._connect_to_ldap()
+
+        return self._connection
+        
+    def _connect_to_ldap(self):
+        connection = ldap.initialize(self.server_uri)
+
+        if self.start_tls:
+            connection.start_tls_s()
+
+        if self.bind_dn is not None:
+            connection.simple_bind_s(self.bind_dn, self.bind_pw)
+        else:
+            connection.sasl_interactive_bind_s('', ldap.sasl.external())
+
+        return connection
+        
+from ansible.module_utils.basic import *  # noqa
+main()
