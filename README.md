@@ -69,21 +69,9 @@ machine so that `ansible` can find it.
 $ git clone https://github.com/unchained-capital/ansible-ldap-modules
 ```
 
-Once you have `python-ldap` installed, you'll need to link the
-executable files in this repository into Ansible's library path.  The
-simplest way to do this is to create a `library` folder at the
-top-level of your playbook repository and create symlinks within it to
-the module files in this repository:
-
-```
-$ mkdir -p library
-$ ln -s ansible-ldap-modules/ldap_entry library/ldap_entry
-$ ln -s ansible-ldap-modules/ldap_attr  library/ldap_attr
-```
-
-You can also explicitly set the `ANSIBLE_LIBRARY` environment variable
-or the `library` entry within the `defaults` section of your
-`ansible.cfg` to include this repository's directory.
+Now either set the `ANSIBLE_LIBRARY` environment variable or the
+`library` entry within the `defaults` section of your `ansible.cfg` to
+include this repository's directory.
 
 # Usage
 
@@ -110,7 +98,7 @@ below):
       dn: "ou=People,dc=example,dc=com"
       ou: People
       objectClass: organizationalUnit
-      description: Getting together and having a good time.
+      description: A bunch of Ansible-lovers.
 ```
 
 The target host of an LDAP operation is assumed to be the same host as
@@ -126,7 +114,7 @@ to LDAP server running on `server0` listenting on port 389.  This example:
       dn: "ou=People,dc=example,dc=com"
       ou: People
       objectClass: organizationalUnit
-      description: Getting together and having a good time.
+      description: A bunch of Ansible-lovers.
 ```
 
 would target an LDAP server at `server1`.
@@ -150,7 +138,7 @@ Credentials can be specified as well:
       dn: "ou=People,dc=example,dc=com"
       ou: People
       objectClass: organizationalUnit
-      description: Getting together and having a good time.
+      description: A bunch of Ansible-lovers.
 ```
 
 ## Modules
@@ -173,7 +161,7 @@ Ansible, `ldap_entry` does nothing.  You can, however, use
     dn: "ou=People,dc=example,dc=com"
 	ou: People
 	objectClass: organizationalUnit
-	description: Getting together and having a good time.
+	description: A bunch of Ansible-lovers.
 ```
 
 If the `ou=People,dc=example,dc=com` entry has its `description` field
@@ -210,7 +198,7 @@ Here's a simple example.
     dn: "ou=People,dc=example,dc=com"
 	name:  description
 	state:  exact
-	values: Getting together and having a good time.
+	values: A bunch of Ansible-lovers.
 
 - name: Ensure members are correct for cn=Admins,ou=Groups
   ldap_attr:
