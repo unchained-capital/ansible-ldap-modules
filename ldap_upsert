@@ -190,7 +190,7 @@ class LdapUpsert(object):
     def _attribute_value_check(self, attr, value):
         try:
             return bool(self.connection.compare_s(self.dn, attr, value))
-        except ldap.NO_SUCH_ATTRIBUTE:
+        except ldap.NO_SUCH_ATTRIBUTE, ldap.UNDEFINED_TYPE:
             return None
 
     def _extract_value(self, values):
