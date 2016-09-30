@@ -104,23 +104,39 @@ class LdapUpsert(object):
     def __init__(self, module):
         self.module = module
 
+        # Parameters that we have to directly pass to python-ldap need
+        # to converted to UTF-8 first, as python-ldap doesn't
+        # understand unicode strings.
+        
+        # Server parameters
         self.server_uri = self.module.params['server_uri']
-        self.start_tls  = self._boolean_param('start_tls')
+        self.start_tls  = self.module.boolean(self.module.params['start_tls'])
         self.bind_dn    = self._utf8_param('bind_dn')
         self.bind_pw    = self._utf8_param('bind_pw')
-        
+
+        # Entry parameters
         self.dn = self._utf8_param('dn')
         self._load_attrs()
 
         if 'objectClass' not in self.attrs:
             self.module.fail_json(msg="At least one objectClass must be provided")
 
-    def _boolean_param(self, name):
-        return self.module.boolean(self.module.params[name])
-        
+    def _force_utf8(self, value):
+        """If value is Unicode, encode to UTF-8."""
+        if isinstance(value, unicode):
+            return value.encode('utf-8')
+        return value
+
     def _utf8_param(self, name):
+        """Extract a parameter as UTF-8."""
         return self._force_utf8(self.module.params[name])
 
+    def _load_attrs(self):
+        self.attrs = {}
+        for name, raw in self.module.params.iteritems():
+            if name not in self.module.argument_spec:
+                self.attrs[name] = self._load_attr_values(name, raw)
+        
     def _load_attr_values(self, name, raw):
         if isinstance(raw, basestring):
             values = raw.split(',')
@@ -132,19 +148,7 @@ class LdapUpsert(object):
 
         return map(self._force_utf8, values)
         
-    def _force_utf8(self, value):
-        """ If value is unicode, encode to utf-8. """
-        if isinstance(value, unicode):
-            value = value.encode('utf-8')
-
-        return value
             
-    def _load_attrs(self):
-        self.attrs = {}
-        for name, raw in self.module.params.iteritems():
-            if name not in self.module.argument_spec:
-                self.attrs[name] = self._load_attr_values(name, raw)
-
     def main(self):
         if self.entry_exists():
             results = self.update_entry()
@@ -169,10 +173,9 @@ class LdapUpsert(object):
 
     def update_entry(self):
         results = []
-        for attr, value in self.attrs.iteritems():
+        for attr, values in self.attrs.iteritems():
             if attr == 'objectClass': continue
-            value   = self._extract_value(value)
-            check   = self._attribute_value_check(attr, value)
+            check = self._attribute_values_check(attr, values)
             if check is False:
                 op = ldap.MOD_REPLACE
             elif check is None:
@@ -180,34 +183,21 @@ class LdapUpsert(object):
             else:
                 op = None       # Nothing to see here...
             if op is not None:
-                result = self.connection.modify_s(self.dn, [(op, attr, value)])
+                result = self.connection.modify_s(self.dn, [(op, attr, values)])
                 results.append(result)
         if len(results) == 0:
             return dict(changed=False)
         else:
             return dict(changed=True, results=results)
 
-    def _attribute_value_check(self, attr, value):
+    def _attribute_values_check(self, attr, values):
         try:
-            return bool(self.connection.compare_s(self.dn, attr, value))
-        except ldap.NO_SUCH_ATTRIBUTE, ldap.UNDEFINED_TYPE:
+            return all(self._attribute_value_check(attr, value) for value in values)
+        except ldap.NO_SUCH_ATTRIBUTE:
             return None
-
-    def _extract_value(self, values):
-        if isinstance(values, basestring):
-            if values == '':
-                values = []
-            else:
-                values = [values]
-
-        if not (isinstance(values, list) and all(isinstance(value, basestring) for value in values)):
-            self.module.fail_json(msg="Attribute values must be strings or lists of strings.")
-
-        values = map(self._force_utf8, values)
-        if len(values) == 1:
-            return values[0]
-        else:
-            return values
+        
+    def _attribute_value_check(self, attr, value):
+        return bool(self.connection.compare_s(self.dn, attr, value))
 
     #
     # LDAP Connection

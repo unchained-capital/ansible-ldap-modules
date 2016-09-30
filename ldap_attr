@@ -146,24 +146,36 @@ class LdapAttr(object):
     def __init__(self, module):
         self.module = module
 
-        # python-ldap doesn't understand unicode strings. Parameters that are
-        # just going to get passed to python-ldap APIs are stored as utf-8.
-        self.dn = self._utf8_param('dn')
-        self.name = self._utf8_param('name')
-        self.values = self._normalized_values()
-        self.state = self.module.params['state']
+        # Parameters that we have to directly pass to python-ldap need
+        # to converted to UTF-8 first, as python-ldap doesn't
+        # understand unicode strings.
+        
+        # Server parameters
         self.server_uri = self.module.params['server_uri']
-        self.start_tls = self.module.boolean(self.module.params['start_tls'])
-        self.bind_dn = self._utf8_param('bind_dn')
-        self.bind_pw = self._utf8_param('bind_pw')
+        self.start_tls  = self.module.boolean(self.module.params['start_tls'])
+        self.bind_dn    = self._utf8_param('bind_dn')
+        self.bind_pw    = self._utf8_param('bind_pw')
+
+        # Attribute parameters
+        self.dn         = self._utf8_param('dn')
+        self.name       = self._utf8_param('name')
+        self.values     = self._normalized_values()
+        self.state      = self.module.params['state']
 
         self._connection = None
 
+    def _force_utf8(self, value):
+        """If value is Unicode, encode to UTF-8."""
+        if isinstance(value, unicode):
+            return value.encode('utf-8')
+        return value
+        
     def _utf8_param(self, name):
+        """Extract a parameter as UTF-8."""
         return self._force_utf8(self.module.params[name])
 
     def _normalized_values(self):
-        """ Parses the value parameter into a list of utf-8 strings. """
+        """Parses the 'values' parameter into a list of UTF-8 strings."""
         values = self.module.params['values']
 
         if isinstance(values, basestring):
@@ -176,13 +188,6 @@ class LdapAttr(object):
             self.module.fail_json(msg="values must be a string or list of strings.")
 
         return map(self._force_utf8, values)
-
-    def _force_utf8(self, value):
-        """ If value is unicode, encode to utf-8. """
-        if isinstance(value, unicode):
-            value = value.encode('utf-8')
-
-        return value
 
     def main(self):
         if self.state == 'present':
@@ -210,57 +215,47 @@ class LdapAttr(object):
     def handle_present(self):
         values_to_add = filter(self.is_value_absent, self.values)
         if len(values_to_add) > 0:
-            modlist = [(ldap.MOD_ADD, self.name, values_to_add)]
+            return [(ldap.MOD_ADD, self.name, values_to_add)]
         else:
-            modlist = []
-
-        return modlist
+            return []
 
     def handle_absent(self):
         values_to_delete = filter(self.is_value_present, self.values)
         if len(values_to_delete) > 0:
-            modlist = [(ldap.MOD_DELETE, self.name, values_to_delete)]
+            return [(ldap.MOD_DELETE, self.name, values_to_delete)]
         else:
-            modlist = []
-
-        return modlist
+            return []
 
     def handle_exact(self):
-        modlist = []
-
         current = self.current_values()
         if frozenset(self.values) != frozenset(current):
             if len(current) == 0:
-                modlist = [(ldap.MOD_ADD, self.name, self.values)]
+                return [(ldap.MOD_ADD, self.name, self.values)]
             elif len(self.values) == 0:
-                modlist = [(ldap.MOD_DELETE, self.name, None)]
+                return [(ldap.MOD_DELETE, self.name, None)]
             else:
-                modlist = [(ldap.MOD_REPLACE, self.name, self.values)]
-
-        return modlist
+                return [(ldap.MOD_REPLACE, self.name, self.values)]
+        return []
 
     #
     # Util
     #
 
     def is_value_present(self, value):
-        """ True if the target attribute has the given value. """
+        """True if the target attribute has the given value."""
         try:
-            is_present = bool(self.connection.compare_s(self.dn, self.name, value))
+            return bool(self.connection.compare_s(self.dn, self.name, value))
         except ldap.NO_SUCH_ATTRIBUTE:
-            is_present = False
-
-        return is_present
+            return False
 
     def is_value_absent(self, value):
-        """ True if the target attribute does not have the given value. """
+        """True if the target attribute does not have the given value."""
         return (not self.is_value_present(value))
 
     def current_values(self):
-        """ Returns the full list of values on the target attribute. """
+        """Returns the full list of values on the target attribute."""
         results = self.connection.search_s(self.dn, ldap.SCOPE_BASE, attrlist=[self.name])
-        values = results[0][1].get(self.name, [])
-
+        values  = results[0][1].get(self.name, [])
         return values
 
     #
